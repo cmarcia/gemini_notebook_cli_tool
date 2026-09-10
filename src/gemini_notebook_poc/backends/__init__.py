@@ -6,10 +6,10 @@ from gemini_notebook_poc.backends.base import BaseNotebookBackend
 from gemini_notebook_poc.backends.enterprise import EnterpriseBackend
 from gemini_notebook_poc.backends.mock import MockBackend
 from gemini_notebook_poc.backends.notebooklm_backend import NotebookLMBackend
-from gemini_notebook_poc.config import AppConfig
+from gemini_notebook_poc.application_configuration import ApplicationConfiguration
 
 
-def get_backend(config: AppConfig) -> BaseNotebookBackend:
+def get_backend(config: ApplicationConfiguration) -> BaseNotebookBackend:
     """Instantiate the appropriate backend based on configuration."""
     mode = config.backend_mode.lower()
     if mode == "mock":

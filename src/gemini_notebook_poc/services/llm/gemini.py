@@ -6,12 +6,15 @@ import asyncio
 import json
 import logging
 import random
+from multiprocessing.connection import answer_challenge
 from typing import Any
 
+from pygments.lexer import words
+
+from gemini_notebook_poc.exceptions import NotebookAuthError
 from gemini_notebook_poc.model.notebook_answer import NotebookAnswer
 from gemini_notebook_poc.model.notebook_info import NotebookInfo
 from gemini_notebook_poc.model.notebook_match import NotebookMatch
-from gemini_notebook_poc.orchestrator import NotebookAuthError
 
 logger = logging.getLogger("gemini_notebook_poc.services.llm.gemini")
 
@@ -34,7 +37,7 @@ class GeminiLLMService:
         self.base_retry_delay = max(0.1, base_retry_delay)
 
     async def synthesize(self, question: str, answers: list[NotebookAnswer]) -> str:
-        valid_answers = [a for a in answers if a.success and a.answer.strip()]
+        valid_answers = [answer for answer in answers if answer.success and answer.answer.strip()]
         if not valid_answers:
             return "No valid answers could be retrieved from the selected notebooks."
 
@@ -42,11 +45,11 @@ class GeminiLLMService:
             return valid_answers[0].answer
 
         blocks: list[str] = []
-        for ans in valid_answers:
-            citations_str = "\n  - Citations: " + "; ".join(ans.citations) if ans.citations else ""
+        for answer in valid_answers:
+            citations_str = "\n  - Citations: " + "; ".join(answer.citations) if answer.citations else ""
             blocks.append(
-                f'=== NOTEBOOK: "{ans.notebook_title}" (ID: {ans.notebook_id}) ===\n'
-                f"{ans.answer}"
+                f'=== NOTEBOOK: "{answer.notebook_title}" (ID: {answer.notebook_id}) ===\n'
+                f"{answer.answer}"
                 f"{citations_str}"
             )
 
@@ -79,7 +82,7 @@ class GeminiLLMService:
                     "Executing Gemini synthesis (attempt %d/%d)...", attempt, self.max_retries
                 )
                 client = genai.Client(api_key=self.api_key)  # type: ignore[attr-defined]
-                resp = await asyncio.to_thread(
+                answer = await asyncio.to_thread(
                     client.models.generate_content,
                     model=self.model,
                     contents=prompt,
@@ -89,11 +92,11 @@ class GeminiLLMService:
                     },
                 )
                 logger.info("Gemini synthesis succeeded on attempt %d.", attempt)
-                return resp.text or "No synthesis generated."
-            except Exception as exc:
-                last_exception = exc
-                err_str = str(exc)
-                is_rate_limit = "429" in err_str or "RESOURCE_EXHAUSTED" in err_str
+                return answer.text or "No synthesis generated."
+            except Exception as ex:
+                last_exception = ex
+                error_str = str(ex)
+                is_rate_limit = "429" in error_str or "RESOURCE_EXHAUSTED" in error_str
 
                 if is_rate_limit and attempt < self.max_retries:
                     delay = (self.base_retry_delay * (2 ** (attempt - 1))) + random.uniform(
@@ -108,16 +111,16 @@ class GeminiLLMService:
                     await asyncio.sleep(delay)
                     continue
 
-                logger.error("Gemini synthesis failed on attempt %d: %s", attempt, exc)
+                logger.error("Gemini synthesis failed on attempt %d: %s", attempt, ex)
                 break
 
         # Fallback to direct answers if LLM call failed
         sections = [f"### Notebook: {ans.notebook_title}\n{ans.answer}" for ans in valid_answers]
-        err_str = str(last_exception) if last_exception else "Unknown error"
-        if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+        error_str = str(last_exception) if last_exception else "Unknown error"
+        if "429" in error_str or "RESOURCE_EXHAUSTED" in error_str:
             notice = "*Note: Gemini API rate limit reached for synthesis. Displaying individual answers directly from each notebook:*"
         else:
-            notice = f"*Note: LLM synthesis encountered an issue ({err_str}). Displaying direct answers from each notebook:*"
+            notice = f"*Note: LLM synthesis encountered an issue ({error_str}). Displaying direct answers from each notebook:*"
         return notice + "\n\n" + "\n\n---\n\n".join(sections)
 
     async def semantic_search(
@@ -141,10 +144,10 @@ class GeminiLLMService:
             )
 
         catalog_lines = []
-        for nb in catalog:
-            nid, ntitle, ndesc = _get_nb_info(nb)
-            desc_part = f" - {ndesc}" if ndesc else ""
-            catalog_lines.append(f"- [{nid}] {ntitle}{desc_part}")
+        for notebook in catalog:
+            notebook_id, notebook_title, notebook_description = _get_nb_info(notebook)
+            description = f" - {notebook_description}" if notebook_description else ""
+            catalog_lines.append(f"- [{notebook_id}] {notebook_title}{description}")
         catalog_text = "\n".join(catalog_lines)
 
         system_instruction = (
@@ -171,7 +174,7 @@ class GeminiLLMService:
                     "Executing Gemini semantic search (attempt %d/%d)...", attempt, self.max_retries
                 )
                 client = genai.Client(api_key=self.api_key)  # type: ignore[attr-defined]
-                resp = await asyncio.to_thread(
+                response = await asyncio.to_thread(
                     client.models.generate_content,
                     model=self.model,
                     contents=prompt,
@@ -182,7 +185,7 @@ class GeminiLLMService:
                     },
                 )
 
-                raw_text = (resp.text or "[]").strip()
+                raw_text = (response.text or "[]").strip()
                 if "```json" in raw_text:
                     raw_text = raw_text.split("```json")[1].split("```")[0].strip()
                 elif "```" in raw_text:
@@ -202,9 +205,9 @@ class GeminiLLMService:
                         )
                 logger.info("Gemini semantic search found %d matching notebooks.", len(matches))
                 return matches[:limit] if limit else matches
-            except Exception as exc:
-                err_str = str(exc)
-                is_rate_limit = "429" in err_str or "RESOURCE_EXHAUSTED" in err_str
+            except Exception as ex:
+                error_str = str(ex)
+                is_rate_limit = "429" in error_str or "RESOURCE_EXHAUSTED" in error_str
                 if is_rate_limit and attempt < self.max_retries:
                     delay = (self.base_retry_delay * (2 ** (attempt - 1))) + random.uniform(
                         0.1, 0.5
@@ -219,22 +222,22 @@ class GeminiLLMService:
                     continue
 
                 logger.warning(
-                    "Gemini semantic search failed: %s; falling back to keyword search.", exc
+                    "Gemini semantic search failed: %s; falling back to keyword search.", error_str
                 )
                 break
 
         # Fallback to keyword matching
         topic_lower = clean_topic.lower()
-        keywords = [w for w in topic_lower.split() if len(w) > 2]
+        keywords = [word for word in topic_lower.split() if len(word) > 2]
         fallback: list[NotebookMatch] = []
-        for nb in catalog:
-            nid, ntitle, ndesc = _get_nb_info(nb)
-            searchable = f"{ntitle} {ndesc} {nid}".lower()
+        for notebook in catalog:
+            notebook_id, notebook_title, notebook_description = _get_nb_info(notebook)
+            searchable = f"{notebook_title} {notebook_description} {notebook_id}".lower()
             if any(kw in searchable for kw in keywords):
                 fallback.append(
                     NotebookMatch(
-                        notebook_id=nid,
-                        notebook_title=ntitle,
+                        notebook_id=notebook_id,
+                        notebook_title=notebook_title,
                         reason="Matches topic keywords in title or description",
                         relevance=3,
                     )

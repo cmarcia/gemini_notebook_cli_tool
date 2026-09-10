@@ -15,4 +15,4 @@ __pycache__/
 .vscode/
 .idea/
 .DS_Store
-GEMINI.md
+tests/GEMINI.md

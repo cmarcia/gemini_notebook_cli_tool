@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 
-from gemini_notebook_poc.config import AppConfig
+from gemini_notebook_poc.application_configuration import ApplicationConfiguration
 from gemini_notebook_poc.services.llm import (
     GeminiLLMService,
     ILLMService,
@@ -20,47 +20,47 @@ from gemini_notebook_poc.services.notebook import (
 logger = logging.getLogger("gemini_notebook_poc.container")
 
 
-def get_notebook_service(config: AppConfig | None = None) -> INotebookService:
+def get_notebook_service(application_configuration: ApplicationConfiguration | None = None) -> INotebookService:
     """Resolve the appropriate INotebookService implementation based on config."""
-    cfg = config or AppConfig.load()
-    mode = cfg.backend_mode.lower()
+    configuration = application_configuration or ApplicationConfiguration.load()
+    mode = configuration.backend_mode.lower()
 
     if mode == "mock":
         logger.debug("Binding MockNotebookService")
         return MockNotebookService()
     elif mode == "enterprise":
         logger.debug("Binding EnterpriseNotebookService")
-        return EnterpriseNotebookService(cfg)
+        return EnterpriseNotebookService(configuration)
     else:
         logger.debug("Binding NotebookLMService")
         return NotebookLMService()
 
 
-def get_llm_service(config: AppConfig | None = None) -> ILLMService:
+def get_llm_service(application_configuration: ApplicationConfiguration | None = None) -> ILLMService:
     """Resolve the appropriate ILLMService implementation based on config."""
-    cfg = config or AppConfig.load()
+    configuration = application_configuration or ApplicationConfiguration.load()
 
-    if cfg.gemini_api_key.strip():
-        logger.debug("Binding GeminiLLMService with model=%s", cfg.gemini_model)
+    if configuration.gemini_api_key.strip():
+        logger.debug("Binding GeminiLLMService with model=%s", configuration.gemini_model)
         return GeminiLLMService(
-            api_key=cfg.gemini_api_key,
-            model=cfg.gemini_model,
+            api_key=configuration.gemini_api_key,
+            model=configuration.gemini_model,
         )
     logger.debug("Binding MockLLMService (offline fallback)")
     return MockLLMService()
 
 
 def create_orchestrator(
-    config: AppConfig | None = None,
+    application_configuration: ApplicationConfiguration | None = None,
     notebook_service: INotebookService | None = None,
     llm_service: ILLMService | None = None,
 ):
     """Build and inject a NotebookOrchestrator instance."""
     from gemini_notebook_poc.orchestrator import NotebookOrchestrator
 
-    cfg = config or AppConfig.load()
-    nb_svc = notebook_service or get_notebook_service(cfg)
-    l_svc = llm_service or get_llm_service(cfg)
+    configuration = application_configuration or ApplicationConfiguration.load()
+    nb_svc = notebook_service or get_notebook_service(configuration)
+    l_svc = llm_service or get_llm_service(configuration)
 
     return NotebookOrchestrator(
         notebook_service=nb_svc,

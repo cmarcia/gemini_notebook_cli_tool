@@ -20,107 +20,21 @@ import logging
 import sys
 import time
 from collections.abc import Sequence
-from dataclasses import dataclass, field
 from typing import Any
+
+from gemini_notebook_poc.model import (
+    NotebookQueryAnswer,
+    NotebookSourceList,
+    NotebookAnswer,
+    NotebookMatch
+)
 
 # Configure module-level logger
 logger = logging.getLogger("gemini_notebook_poc.orchestrator")
 
 
-# =====================================================================
-# Custom Exceptions Hierarchy
-# =====================================================================
-
-
-class NotebookOrchestratorError(Exception):
-    """Base exception for all errors raised by NotebookOrchestrator."""
-
-
-class NotebookAuthError(NotebookOrchestratorError):
-    """Raised when authentication with NotebookLM or Gemini fails."""
-
-
-class NotebookNotFoundError(NotebookOrchestratorError):
-    """Raised when a requested notebook cannot be located."""
-
-
-class NotebookQueryError(NotebookOrchestratorError):
-    """Raised when an unrecoverable error occurs while querying a notebook."""
-
-
-class SynthesisError(NotebookOrchestratorError):
-    """Raised when cross-notebook LLM synthesis fails fatally."""
-
-
-# =====================================================================
-# Data Models
-# =====================================================================
-
-
-@dataclass
-class NotebookMatch:
-    """Represents a notebook matched by semantic topic search."""
-
-    notebook_id: str
-    notebook_title: str
-    reason: str = ""
-    relevance: int = 5
-
-
-@dataclass
-class NotebookAnswer:
-    """Represents a grounded answer retrieved from an individual notebook."""
-
-    notebook_id: str
-    notebook_title: str
-    answer: str
-    citations: list[str] = field(default_factory=list)
-    success: bool = True
-    error_message: str | None = None
-
-
-@dataclass
-class NotebookQueryAnswer:
-    """Represents the unified response for single or multi-notebook queries."""
-
-    synthesized_answer: str
-    notebook_answers: list[NotebookAnswer] = field(default_factory=list)
-    model_name: str = "NotebookOrchestrator + LLM"
-    all_citations: list[str] = field(default_factory=list)
-
-    @property
-    def successful_count(self) -> int:
-        """Number of notebooks that returned successful grounded answers."""
-        return sum(1 for a in self.notebook_answers if a.success)
-
-    @property
-    def is_multi_notebook(self) -> bool:
-        """True if this answer represents a synthesis of multiple notebooks."""
-        return len(self.notebook_answers) > 1
-
-
 # Backward-compatibility alias
 MultiNotebookAnswer = NotebookQueryAnswer
-
-
-@dataclass
-class NotebookSourceList:
-    """Represents a notebook and its associated uploaded sources."""
-
-    notebook_id: str
-    notebook_title: str
-    sources: list[dict[str, Any]] = field(default_factory=list)
-    error_message: str | None = None
-
-    @property
-    def source_count(self) -> int:
-        """Total number of sources contained in this notebook."""
-        return len(self.sources)
-
-
-# =====================================================================
-# Unified Notebook Orchestrator (Dependency Injection)
-# =====================================================================
 
 
 class NotebookOrchestrator:
@@ -152,24 +66,24 @@ class NotebookOrchestrator:
     @property
     def notebook_service(self) -> Any:
         if self._notebook_service is None:
-            from gemini_notebook_poc.config import AppConfig
+            from gemini_notebook_poc.application_configuration import ApplicationConfiguration
             from gemini_notebook_poc.services.notebook.notebooklm import (
                 NotebookLMService,
             )
 
-            cfg = AppConfig.load()
-            if cfg.backend_mode.lower() == "mock":
+            configuration = ApplicationConfiguration.load()
+            if configuration.backend_mode.lower() == "mock":
                 from gemini_notebook_poc.services.notebook.mock import (
                     MockNotebookService,
                 )
 
                 self._notebook_service = MockNotebookService()
-            elif cfg.backend_mode.lower() == "enterprise":
+            elif configuration.backend_mode.lower() == "enterprise":
                 from gemini_notebook_poc.services.notebook.enterprise import (
                     EnterpriseNotebookService,
                 )
 
-                self._notebook_service = EnterpriseNotebookService(cfg)
+                self._notebook_service = EnterpriseNotebookService(configuration)
             else:
                 self._notebook_service = NotebookLMService(
                     client_factory=self._get_notebooklm_client
@@ -179,11 +93,11 @@ class NotebookOrchestrator:
     @property
     def llm_service(self) -> Any:
         if self._llm_service is None:
-            from gemini_notebook_poc.config import AppConfig
+            from gemini_notebook_poc.application_configuration import ApplicationConfiguration
             from gemini_notebook_poc.services.llm.gemini import GeminiLLMService
             from gemini_notebook_poc.services.llm.mock import MockLLMService
 
-            cfg = AppConfig.load()
+            cfg = ApplicationConfiguration.load()
             api_key = self.gemini_api_key if self.gemini_api_key is not None else cfg.gemini_api_key
             if api_key.strip():
                 self._llm_service = GeminiLLMService(
@@ -343,10 +257,10 @@ class NotebookOrchestrator:
                 title = notebook_id
         if client is not None and hasattr(client, "chat"):
             try:
-                res = await client.chat.ask(notebook_id, question)
-                answer_text = getattr(res, "answer", str(res))
+                llm_response = await client.chat.ask(notebook_id, question)
+                answer_text = getattr(llm_response, "answer", str(llm_response))
                 citations: list[str] = []
-                for ref in getattr(res, "references", []) or []:
+                for ref in getattr(llm_response, "references", []) or []:
                     cited_text = getattr(ref, "cited_text", None)
                     if cited_text:
                         citations.append(f'"{cited_text[:120]}..."')
@@ -357,14 +271,14 @@ class NotebookOrchestrator:
                     citations=citations,
                     success=True,
                 )
-            except Exception as exc:
+            except Exception as ex:
                 return NotebookAnswer(
                     notebook_id=notebook_id,
                     notebook_title=title,
-                    answer=f"Error querying notebook: {exc}",
+                    answer=f"Error querying notebook: {ex}",
                     citations=[],
                     success=False,
-                    error_message=str(exc),
+                    error_message=str(ex),
                 )
 
         # Fallback to injected notebook_service
@@ -378,67 +292,67 @@ class NotebookOrchestrator:
     ) -> NotebookQueryAnswer:
         """Unified query: query one or multiple notebooks in parallel and synthesize via LLM."""
         if isinstance(notebook_ids, str):
-            ids_list = [s.strip() for s in notebook_ids.split(",") if s.strip()]
+            notebook_ids_list = [s.strip() for s in notebook_ids.split(",") if s.strip()]
         else:
-            ids_list = [str(nid).strip() for nid in notebook_ids if str(nid).strip()]
+            notebook_ids_list = [str(notebook).strip() for notebook in notebook_ids if str(notebook).strip()]
 
-        if not ids_list:
+        if not notebook_ids_list:
             logger.warning("query() invoked with empty notebook_ids.")
             return NotebookQueryAnswer(
                 synthesized_answer="No notebooks were provided to query.",
                 notebook_answers=[],
             )
 
-        logger.info("Querying %d notebook(s) for: '%.50s...'", len(ids_list), question)
-        titles_map = dict(notebook_titles) if notebook_titles else {}
+        logger.info("Querying %d notebook(s) for: '%.50s...'", len(notebook_ids_list), question)
+        titles = dict(notebook_titles) if notebook_titles else {}
 
         # Query all notebooks concurrently via notebook_service
-        async def _ask(nid: str) -> NotebookAnswer:
+        async def _ask(notebook_id: str) -> NotebookAnswer:
             start = time.monotonic()
             try:
-                ans = await self.notebook_service.query_notebook(nid, question)
-                if nid in titles_map:
-                    ans.notebook_title = titles_map[nid]
+                answer = await self.notebook_service.query_notebook(notebook_id, question)
+                if notebook_id in titles:
+                    answer.notebook_title = titles[notebook_id]
                 elif (
-                    not ans.notebook_title
-                    or ans.notebook_title.startswith("Notebook (")
-                    or ans.notebook_title == nid
+                    not answer.notebook_title
+                    or answer.notebook_title.startswith("Notebook (")
+                    or answer.notebook_title == notebook_id
                 ):
                     try:
-                        nb = await self.notebook_service.get_notebook(nid)
-                        if nb and nb.title:
-                            ans.notebook_title = nb.title
+                        notebook = await self.notebook_service.get_notebook(notebook_id)
+                        if notebook and notebook.title:
+                            answer.notebook_title = notebook.title
                     except Exception:
                         pass
-                logger.info("Queried notebook %s in %.2fs", nid, time.monotonic() - start)
-                return ans
+                logger.info("Queried notebook %s in %.2fs", notebook_id, time.monotonic() - start)
+                return answer
             except Exception as exc:
-                logger.warning("Query failed for notebook %s: %s", nid, exc)
-                title = titles_map.get(nid)
+                logger.warning("Query failed for notebook %s: %s", notebook_id, exc)
+                title = titles.get(notebook_id)
                 if not title:
                     try:
-                        nb = await self.notebook_service.get_notebook(nid)
-                        title = getattr(nb, "title", nid)
+                        notebook = await self.notebook_service.get_notebook(notebook_id)
+                        title = getattr(notebook, "title", notebook_id)
                     except Exception:
-                        title = nid
+                        title = notebook_id
                 return NotebookAnswer(
-                    notebook_id=nid,
+                    notebook_id=notebook_id,
                     notebook_title=title,
                     answer=f"Error querying notebook: {exc}",
                     success=False,
                     error_message=str(exc),
                 )
 
-        tasks = [_ask(nid) for nid in ids_list]
+        tasks = [_ask(notebook_id) for notebook_id in notebook_ids_list]
         answers = list(await asyncio.gather(*tasks))
 
         # Synthesize via llm_service
         synthesized_text = await self.llm_service.synthesize(question, answers)
 
         all_citations: list[str] = []
-        for a in answers:
-            for c in a.citations:
-                all_citations.append(f"[{a.notebook_title}] {c}")
+        for answer in answers:
+            for citation in answer.citations:
+                all_citations.append(f"[{answer.notebook_title}] {citation}")
 
         return NotebookQueryAnswer(
             synthesized_answer=synthesized_text,
@@ -454,10 +368,6 @@ class NotebookOrchestrator:
 # Backward-compatibility alias
 MultiNotebookOrchestrator = NotebookOrchestrator
 
-
-# =====================================================================
-# Standalone CLI Entrypoint
-# =====================================================================
 
 
 async def _standalone_main() -> None:

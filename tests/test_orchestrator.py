@@ -6,20 +6,22 @@ import pytest
 
 from gemini_notebook_poc.backends.mock import MockBackend
 from gemini_notebook_poc.cli import resolve_notebook_selection
-from gemini_notebook_poc.config import AppConfig
+from gemini_notebook_poc.application_configuration import ApplicationConfiguration
 from gemini_notebook_poc.model import NotebookInfo
+from gemini_notebook_poc.exceptions import (
+    NotebookAuthError,
+    NotebookNotFoundError,
+    NotebookOrchestratorError,
+    NotebookQueryError,
+    SynthesisError,
+)
 from gemini_notebook_poc.orchestrator import (
     MultiNotebookAnswer,
     MultiNotebookOrchestrator,
     NotebookAnswer,
-    NotebookAuthError,
-    NotebookNotFoundError,
-    NotebookOrchestrator,
-    NotebookOrchestratorError,
     NotebookQueryAnswer,
-    NotebookQueryError,
-    NotebookSourceList,
-    SynthesisError,
+    NotebookSourceList, NotebookOrchestrator
+
 )
 from gemini_notebook_poc.services.notebook.mock import MockNotebookService
 from gemini_notebook_poc.services.notebook.notebooklm import NotebookLMService
@@ -447,7 +449,7 @@ async def test_find_notebooks_mock_llm(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_mock_backend_ask_notebooks():
-    config = AppConfig(backend_mode="mock", gemini_api_key="")
+    config = ApplicationConfiguration(backend_mode="mock", gemini_api_key="")
     backend = MockBackend(config)
 
     result = await backend.ask_notebooks(
@@ -464,7 +466,7 @@ async def test_mock_backend_ask_notebooks():
 
 @pytest.mark.asyncio
 async def test_mock_backend_find_notebooks():
-    config = AppConfig(backend_mode="mock", gemini_api_key="")
+    config = ApplicationConfiguration(backend_mode="mock", gemini_api_key="")
     backend = MockBackend(config)
 
     matches = await backend.find_notebooks("architecture")
@@ -493,7 +495,7 @@ def test_protocol_compliance():
     nlm_nb = NotebookLMService()
     assert isinstance(nlm_nb, INotebookService)
 
-    ent_nb = EnterpriseNotebookService(AppConfig(backend_mode="enterprise"))
+    ent_nb = EnterpriseNotebookService(ApplicationConfiguration(backend_mode="enterprise"))
     assert isinstance(ent_nb, INotebookService)
 
     mock_llm = MockLLMService()
@@ -606,14 +608,14 @@ def test_container_factories():
     from gemini_notebook_poc.services.notebook.mock import MockNotebookService
 
     # Mock mode
-    mock_cfg = AppConfig(backend_mode="mock", gemini_api_key="")
+    mock_cfg = ApplicationConfiguration(backend_mode="mock", gemini_api_key="")
     nb_svc = get_notebook_service(mock_cfg)
     assert isinstance(nb_svc, MockNotebookService)
     llm_svc = get_llm_service(mock_cfg)
     assert isinstance(llm_svc, MockLLMService)
 
     # Enterprise mode
-    ent_cfg = AppConfig(backend_mode="enterprise", gemini_api_key="real-key")
+    ent_cfg = ApplicationConfiguration(backend_mode="enterprise", gemini_api_key="real-key")
     ent_nb = get_notebook_service(ent_cfg)
     assert isinstance(ent_nb, EnterpriseNotebookService)
     gem_llm = get_llm_service(ent_cfg)
@@ -628,7 +630,7 @@ def test_container_factories():
 
 @pytest.mark.asyncio
 async def test_mock_backend_crud_delegation():
-    config = AppConfig(backend_mode="mock", gemini_api_key="")
+    config = ApplicationConfiguration(backend_mode="mock", gemini_api_key="")
     backend = MockBackend(config)
 
     # Create notebook via backend

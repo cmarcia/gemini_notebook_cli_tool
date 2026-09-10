@@ -5,10 +5,10 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from gemini_notebook_poc.exceptions import NotebookAuthError, NotebookNotFoundError
 from gemini_notebook_poc.model.notebook_answer import NotebookAnswer
 from gemini_notebook_poc.model.notebook_info import NotebookInfo
 from gemini_notebook_poc.model.source_info import SourceInfo
-from gemini_notebook_poc.orchestrator import NotebookAuthError, NotebookNotFoundError
 
 logger = logging.getLogger("gemini_notebook_poc.services.notebook.notebooklm")
 
@@ -170,11 +170,11 @@ class NotebookLMService:
                 except Exception:
                     title = notebook_id
             try:
-                res = await client.chat.ask(notebook_id, question)
-                answer_text = getattr(res, "answer", str(res))
+                llm_response = await client.chat.ask(notebook_id, question)
+                answer_text = getattr(llm_response, "answer", str(llm_response))
 
                 citations: list[str] = []
-                references = getattr(res, "references", []) or []
+                references = getattr(llm_response, "references", []) or []
                 for ref in references:
                     num = getattr(ref, "citation_number", None)
                     cited_text = getattr(ref, "cited_text", None)

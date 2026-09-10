@@ -7,11 +7,11 @@ from typing import Any
 
 import httpx
 
-from gemini_notebook_poc.config import AppConfig
+from gemini_notebook_poc.application_configuration import ApplicationConfiguration
+from gemini_notebook_poc.exceptions import NotebookAuthError, NotebookNotFoundError
 from gemini_notebook_poc.model.notebook_answer import NotebookAnswer
 from gemini_notebook_poc.model.notebook_info import NotebookInfo
 from gemini_notebook_poc.model.source_info import SourceInfo
-from gemini_notebook_poc.orchestrator import NotebookAuthError, NotebookNotFoundError
 
 logger = logging.getLogger("gemini_notebook_poc.services.notebook.enterprise")
 
@@ -19,10 +19,10 @@ logger = logging.getLogger("gemini_notebook_poc.services.notebook.enterprise")
 class EnterpriseNotebookService:
     """Connects to Google Cloud Discovery Engine (Gemini Enterprise DataStores)."""
 
-    def __init__(self, config: AppConfig) -> None:
-        self.config = config
-        self.project_id = config.gcp_project_id or "default"
-        self.location = config.gcp_location or "global"
+    def __init__(self, application_configuration: ApplicationConfiguration) -> None:
+        self.configuration = application_configuration
+        self.project_id = application_configuration.gcp_project_id or "default"
+        self.location = application_configuration.gcp_location or "global"
         self.base_url = (
             f"https://discoveryengine.googleapis.com/v1alpha/projects/"
             f"{self.project_id}/locations/{self.location}"
@@ -30,7 +30,7 @@ class EnterpriseNotebookService:
         self._titles_cache: dict[str, str] = {}
 
     def _get_headers(self) -> dict[str, str]:
-        token = self.config.get_bearer_token()
+        token = self.configuration.get_bearer_token()
         if not token:
             raise NotebookAuthError(
                 "No valid GCP Bearer Token found. Please authenticate via `gcloud auth application-default login` "
@@ -41,6 +41,18 @@ class EnterpriseNotebookService:
             "Content-Type": "application/json",
             "X-Goog-User-Project": self.project_id,
         }
+
+    async def _request(
+        self,
+        method: str,
+        url: str,
+        *,
+        timeout: float = 20.0,
+        **kwargs: Any,
+    ) -> httpx.Response:
+        """Issue a Discovery Engine HTTP request with shared auth headers."""
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            return await client.request(method, url, headers=self._get_headers(), **kwargs)
 
     async def create_notebook(self, title: str, description: str = "") -> NotebookInfo:
         url = f"{self.base_url}/collections/default_collection/dataStores"
@@ -53,161 +65,151 @@ class EnterpriseNotebookService:
         }
         params = {"dataStoreId": data_store_id}
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(url, json=payload, params=params, headers=self._get_headers())
-            if resp.status_code in (200, 201):
-                data = resp.json()
-                return NotebookInfo(
-                    id=data.get("name", data_store_id).split("/")[-1],
-                    title=title,
-                    description=description,
-                )
-            raise RuntimeError(
-                f"Failed to create Enterprise DataStore ({resp.status_code}): {resp.text}"
+        response = await self._request("POST", url, timeout=30.0, json=payload, params=params)
+        if response.status_code in (200, 201):
+            data = response.json()
+            return NotebookInfo(
+                id=data.get("name", data_store_id).split("/")[-1],
+                title=title,
+                description=description,
             )
+        raise RuntimeError(
+            f"Failed to create Enterprise DataStore ({response.status_code}): {response.text}"
+        )
 
     async def get_notebook(self, notebook_id: str) -> NotebookInfo:
-        nbs = await self.list_notebooks()
-        for nb in nbs:
-            if nb.id == notebook_id:
-                self._titles_cache[nb.id] = nb.title
-                return nb
+        notebooks = await self.list_notebooks()
+        for noteboook in notebooks:
+            if noteboook.id == notebook_id:
+                self._titles_cache[noteboook.id] = noteboook.title
+                return noteboook
         raise NotebookNotFoundError(f"Enterprise DataStore '{notebook_id}' not found.")
 
     async def list_notebooks(self) -> list[NotebookInfo]:
         url = f"{self.base_url}/collections/default_collection/dataStores"
-        async with httpx.AsyncClient(timeout=20.0) as client:
-            resp = await client.get(url, headers=self._get_headers())
-            if resp.status_code != 200:
-                logger.warning("Discovery Engine list failed (%d): %s", resp.status_code, resp.text)
-                return []
-            data = resp.json()
-            data_stores = data.get("dataStores", [])
-            out: list[NotebookInfo] = []
-            for ds in data_stores:
-                full_name = ds.get("name", "")
-                ds_id = full_name.split("/")[-1] if "/" in full_name else full_name
-                title = ds.get("displayName", ds_id)
-                self._titles_cache[ds_id] = title
-                out.append(
-                    NotebookInfo(
-                        id=ds_id,
-                        title=title,
-                        raw=ds,
-                    )
+        response = await self._request("GET", url)
+        if response.status_code != 200:
+            logger.warning("Discovery Engine list failed (%d): %s", response.status_code, response.text)
+            return []
+        data = response.json()
+        data_stores = data.get("dataStores", [])
+        out: list[NotebookInfo] = []
+        for data_store in data_stores:
+            full_name = data_store.get("name", "")
+            data_store_id = full_name.split("/")[-1] if "/" in full_name else full_name
+            display_name = data_store.get("displayName", data_store_id)
+            self._titles_cache[data_store_id] = display_name
+            out.append(
+                NotebookInfo(
+                    id=data_store_id,
+                    title=display_name,
+                    raw=data_store,
                 )
-            return out
+            )
+        return out
 
     async def update_notebook(
         self,
         notebook_id: str,
         title: str | None = None,
-        description: str | None = None,
     ) -> NotebookInfo:
         url = f"{self.base_url}/collections/default_collection/dataStores/{notebook_id}"
         payload: dict[str, Any] = {}
         if title:
             payload["displayName"] = title
-        async with httpx.AsyncClient(timeout=20.0) as client:
-            resp = await client.patch(url, json=payload, headers=self._get_headers())
-            if resp.status_code == 200:
-                return await self.get_notebook(notebook_id)
-            raise RuntimeError(f"Failed to update DataStore: {resp.text}")
+        response = await self._request("PATCH", url, json=payload)
+        if response.status_code == 200:
+            return await self.get_notebook(notebook_id)
+        raise RuntimeError(f"Failed to update DataStore: {response.text}")
 
     async def delete_notebook(self, notebook_id: str) -> bool:
         url = f"{self.base_url}/collections/default_collection/dataStores/{notebook_id}"
-        async with httpx.AsyncClient(timeout=20.0) as client:
-            resp = await client.delete(url, headers=self._get_headers())
-            return resp.status_code in (200, 204)
+        response = await self._request("DELETE", url)
+        return response.status_code in (200, 204)
 
     async def list_sources(self, notebook_id: str) -> list[SourceInfo]:
         url = f"{self.base_url}/collections/default_collection/dataStores/{notebook_id}/branches/0/documents"
-        async with httpx.AsyncClient(timeout=20.0) as client:
-            resp = await client.get(url, headers=self._get_headers())
-            if resp.status_code != 200:
-                return []
-            data = resp.json()
-            docs = data.get("documents", [])
-            out: list[SourceInfo] = []
-            for d in docs:
-                doc_id = d.get("id", "")
-                title = d.get("jsonData", {}).get("title") or doc_id
-                out.append(
-                    SourceInfo(
-                        id=doc_id,
-                        title=title,
-                        source_type="Document",
-                        snippet=d.get("jsonData", {}).get("content", "")[:120],
-                    )
+        response = await self._request("GET", url)
+        if response.status_code != 200:
+            return []
+        data = response.json()
+        documents = data.get("documents", [])
+        out: list[SourceInfo] = []
+        for document in documents:
+            document_id = document.get("id", "")
+            document_title = document.get("jsonData", {}).get("title") or document_id
+            out.append(
+                SourceInfo(
+                    id=document_id,
+                    title=document_title,
+                    source_type="Document",
+                    snippet=document.get("jsonData", {}).get("content", "")[:120],
                 )
-            return out
+            )
+        return out
 
     async def add_source(
         self,
         notebook_id: str,
         title: str,
         content: str,
-        source_type: str = "Document",
     ) -> SourceInfo:
         url = f"{self.base_url}/collections/default_collection/dataStores/{notebook_id}/branches/0/documents"
-        doc_id = f"doc-{title.lower().replace(' ', '-')[:20]}"
+        document_id = f"doc-{title.lower().replace(' ', '-')[:20]}"
         payload = {
-            "id": doc_id,
+            "id": document_id,
             "jsonData": {"title": title, "content": content},
         }
-        async with httpx.AsyncClient(timeout=20.0) as client:
-            resp = await client.post(url, json=payload, headers=self._get_headers())
-            if resp.status_code in (200, 201):
-                return SourceInfo(id=doc_id, title=title, snippet=content[:120])
-            raise RuntimeError(f"Failed to add document: {resp.text}")
+        response = await self._request("POST", url, json=payload)
+        if response.status_code in (200, 201):
+            return SourceInfo(id=document_id, title=title, snippet=content[:120])
+        raise RuntimeError(f"Failed to add document: {response.text}")
 
     async def delete_source(self, notebook_id: str, source_id: str) -> bool:
         url = f"{self.base_url}/collections/default_collection/dataStores/{notebook_id}/branches/0/documents/{source_id}"
-        async with httpx.AsyncClient(timeout=20.0) as client:
-            resp = await client.delete(url, headers=self._get_headers())
-            return resp.status_code in (200, 204)
+        response = await self._request("DELETE", url)
+        return response.status_code in (200, 204)
 
     async def query_notebook(self, notebook_id: str, question: str) -> NotebookAnswer:
         title = self._titles_cache.get(notebook_id)
         if not title:
             try:
-                nb = await self.get_notebook(notebook_id)
-                title = nb.title
+                notebook = await self.get_notebook(notebook_id)
+                title = notebook.title
                 self._titles_cache[notebook_id] = title
             except Exception:
                 title = notebook_id
 
         url = f"{self.base_url}/collections/default_collection/dataStores/{notebook_id}/servingConfigs/default_search:search"
         payload = {"query": question, "pageSize": 5}
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            try:
-                resp = await client.post(url, json=payload, headers=self._get_headers())
-                if resp.status_code != 200:
-                    return NotebookAnswer(
-                        notebook_id=notebook_id,
-                        notebook_title=title,
-                        answer=f"Discovery Engine search error ({resp.status_code}): {resp.text}",
-                        success=False,
-                    )
-                data = resp.json()
-                results = data.get("results", [])
-                citations = [f"Doc: {r.get('document', {}).get('id', '')}" for r in results]
-                summary = (
-                    data.get("summary", {}).get("summaryText", "")
-                    or f"Found {len(results)} grounded document(s)."
-                )
+        try:
+            response = await self._request("POST", url, timeout=30.0, json=payload)
+            if response.status_code != 200:
                 return NotebookAnswer(
                     notebook_id=notebook_id,
                     notebook_title=title,
-                    answer=summary,
-                    citations=citations,
-                    success=True,
-                )
-            except Exception as exc:
-                return NotebookAnswer(
-                    notebook_id=notebook_id,
-                    notebook_title=title,
-                    answer=f"Error querying enterprise notebook: {exc}",
+                    answer=f"Discovery Engine search error ({response.status_code}): {response.text}",
                     success=False,
-                    error_message=str(exc),
                 )
+            data = response.json()
+            results = data.get("results", [])
+            citations = [f"Doc: {r.get('document', {}).get('id', '')}" for r in results]
+            summary = (
+                data.get("summary", {}).get("summaryText", "")
+                or f"Found {len(results)} grounded document(s)."
+            )
+            return NotebookAnswer(
+                notebook_id=notebook_id,
+                notebook_title=title,
+                answer=summary,
+                citations=citations,
+                success=True,
+            )
+        except Exception as ex:
+            return NotebookAnswer(
+                notebook_id=notebook_id,
+                notebook_title=title,
+                answer=f"Error querying enterprise notebook: {ex}",
+                success=False,
+                error_message=str(ex),
+            )

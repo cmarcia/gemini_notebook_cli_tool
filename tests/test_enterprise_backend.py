@@ -9,11 +9,11 @@ from gemini_notebook_poc.backends.enterprise import (
     EnterpriseAPIError,
     EnterpriseBackend,
 )
-from gemini_notebook_poc.config import AppConfig
+from gemini_notebook_poc.application_configuration import ApplicationConfiguration
 
 
 def test_enterprise_backend_url():
-    config = AppConfig(
+    config = ApplicationConfiguration(
         backend_mode="enterprise",
         gcp_project_id="my-enterprise-project",
         gcp_location="us",
@@ -27,7 +27,7 @@ def test_enterprise_backend_url():
 
 @pytest.mark.asyncio
 async def test_enterprise_backend_disabled_api_error():
-    config = AppConfig(
+    config = ApplicationConfiguration(
         backend_mode="enterprise",
         gcp_project_id="taxes-507506",
         gcp_access_token="fake-token",

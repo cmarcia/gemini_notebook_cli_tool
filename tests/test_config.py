@@ -3,11 +3,11 @@
 import os
 from unittest.mock import patch
 
-from gemini_notebook_poc.config import AppConfig
+from gemini_notebook_poc.application_configuration import ApplicationConfiguration
 
 
 def test_config_defaults():
-    config = AppConfig()
+    config = ApplicationConfiguration()
     assert config.backend_mode == "enterprise"
     assert config.gcp_location == "global"
     assert config.gemini_model == "gemini-2.5-flash"
@@ -24,7 +24,7 @@ def test_config_load_from_env():
             "GEMINI_MODEL": "gemini-2.5-pro",
         },
     ):
-        config = AppConfig.load()
+        config = ApplicationConfiguration.load()
         assert config.backend_mode == "mock"
         assert config.gcp_project_id == "test-project-123"
         assert config.gcp_location == "us"
@@ -33,12 +33,12 @@ def test_config_load_from_env():
 
 
 def test_get_bearer_token_explicit():
-    config = AppConfig(gcp_access_token="ya29.test-explicit-token")
+    config = ApplicationConfiguration(gcp_access_token="ya29.test-explicit-token")
     assert config.get_bearer_token() == "ya29.test-explicit-token"
 
 
 def test_load_env_file_basic(tmp_path):
-    from gemini_notebook_poc.config import load_env_file
+    from gemini_notebook_poc.application_configuration import load_env_file
 
     env_path = tmp_path / ".env"
     env_path.write_text("TEST_KEY_FOO=bar_value\n# comment\n", encoding="utf-8")

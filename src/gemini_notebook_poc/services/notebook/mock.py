@@ -6,10 +6,10 @@ import logging
 import uuid
 from datetime import UTC, datetime
 
+from gemini_notebook_poc.exceptions import NotebookNotFoundError
 from gemini_notebook_poc.model.notebook_answer import NotebookAnswer
 from gemini_notebook_poc.model.notebook_info import NotebookInfo
 from gemini_notebook_poc.model.source_info import SourceInfo
-from gemini_notebook_poc.orchestrator import NotebookNotFoundError
 
 logger = logging.getLogger("gemini_notebook_poc.services.notebook.mock")
 

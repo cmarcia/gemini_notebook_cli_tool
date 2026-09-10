@@ -38,7 +38,7 @@ def load_env_file(path: Path | str | None = None) -> None:
         pass
 
 
-class AppConfig(BaseModel):
+class ApplicationConfiguration(BaseModel):
     """Application configuration for Gemini Notebook PoC."""
 
     backend_mode: Literal["enterprise", "notebooklm", "mock"] = Field(
@@ -75,7 +75,7 @@ class AppConfig(BaseModel):
     )
 
     @classmethod
-    def load(cls) -> AppConfig:
+    def load(cls) -> ApplicationConfiguration:
         """Create config from standard environment variables via os.getenv."""
         load_env_file()
         return cls(

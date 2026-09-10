@@ -3,12 +3,12 @@
 import pytest
 
 from gemini_notebook_poc.backends.mock import MockBackend
-from gemini_notebook_poc.config import AppConfig
+from gemini_notebook_poc.application_configuration import ApplicationConfiguration
 
 
 @pytest.mark.asyncio
 async def test_mock_backend_list_notebooks():
-    config = AppConfig(backend_mode="mock")
+    config = ApplicationConfiguration(backend_mode="mock")
     backend = MockBackend(config)
 
     notebooks = await backend.list_notebooks()
@@ -18,7 +18,7 @@ async def test_mock_backend_list_notebooks():
 
 @pytest.mark.asyncio
 async def test_mock_backend_list_sources():
-    config = AppConfig(backend_mode="mock")
+    config = ApplicationConfiguration(backend_mode="mock")
     backend = MockBackend(config)
 
     sources = await backend.list_sources("nb-enterprise-finance-q3")
@@ -28,7 +28,7 @@ async def test_mock_backend_list_sources():
 
 @pytest.mark.asyncio
 async def test_mock_backend_get_source():
-    config = AppConfig(backend_mode="mock")
+    config = ApplicationConfiguration(backend_mode="mock")
     backend = MockBackend(config)
 
     source = await backend.get_source("nb-enterprise-finance-q3", "src-10q-sec-filing")
@@ -38,7 +38,7 @@ async def test_mock_backend_get_source():
 
 @pytest.mark.asyncio
 async def test_mock_backend_ask_question_simulated():
-    config = AppConfig(backend_mode="mock", gemini_api_key="")
+    config = ApplicationConfiguration(backend_mode="mock", gemini_api_key="")
     backend = MockBackend(config)
 
     answer = await backend.ask_question(

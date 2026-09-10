@@ -13,7 +13,7 @@ from gemini_notebook_poc.model.notebook_query_answer import (
 )
 from gemini_notebook_poc.model.notebook_source_list import NotebookSourceList
 from gemini_notebook_poc.model.source_info import SourceInfo
-from gemini_notebook_poc.orchestrator import (
+from gemini_notebook_poc.exceptions import (
     NotebookAuthError,
     NotebookNotFoundError,
     NotebookOrchestratorError,

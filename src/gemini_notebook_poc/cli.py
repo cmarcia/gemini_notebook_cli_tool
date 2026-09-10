@@ -18,7 +18,7 @@ from rich.table import Table
 from gemini_notebook_poc.backends import get_backend
 from gemini_notebook_poc.backends.base import BaseNotebookBackend
 from gemini_notebook_poc.backends.enterprise import EnterpriseAPIError
-from gemini_notebook_poc.config import AppConfig
+from gemini_notebook_poc.application_configuration import ApplicationConfiguration
 from gemini_notebook_poc.model import (
     NotebookInfo,
     NotebookMatch,
@@ -31,7 +31,7 @@ warnings.filterwarnings("ignore")
 console = Console()
 
 
-def print_banner(config: AppConfig) -> None:
+def print_banner(config: ApplicationConfiguration) -> None:
     """Print the application welcome banner and current configuration status."""
     key_status = (
         "[green]Configured[/green]"
@@ -878,7 +878,7 @@ async def run_cli() -> None:
         print_custom_help()
         return
 
-    config = AppConfig.load()
+    config = ApplicationConfiguration.load()
     if args.mock:
         config.backend_mode = "mock"
     elif args.mode:

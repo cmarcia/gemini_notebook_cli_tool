@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import keyword
 import logging
 from typing import Any
+
+from pygments.lexer import words
 
 from gemini_notebook_poc.model.notebook_answer import NotebookAnswer
 from gemini_notebook_poc.model.notebook_info import NotebookInfo
@@ -19,7 +22,7 @@ class MockLLMService:
         self.prefix = prefix
 
     async def synthesize(self, question: str, answers: list[NotebookAnswer]) -> str:
-        valid_answers = [a for a in answers if a.success and a.answer.strip()]
+        valid_answers = [answer for answer in answers if answer.success and answer.answer.strip()]
         if not valid_answers:
             return "No valid answers could be retrieved from the selected notebooks."
 
@@ -27,7 +30,7 @@ class MockLLMService:
             return valid_answers[0].answer
 
         sections = [
-            f"### [Grounded in: {ans.notebook_title}]\n{ans.answer}" for ans in valid_answers
+            f"### [Grounded in: {answer.notebook_title}]\n{answer.answer}" for answer in valid_answers
         ]
         return (
             f"> [{self.prefix}]: Synthesized cross-notebook response for question: '{question}'\n\n"
@@ -41,7 +44,7 @@ class MockLLMService:
         if not clean_topic or not catalog:
             return []
 
-        def _get_nb_info(item: Any) -> tuple[str, str, str]:
+        def _get_notebook_info(item: Any) -> tuple[str, str, str]:
             if isinstance(item, dict):
                 return (
                     str(item.get("id", "")),
@@ -54,22 +57,22 @@ class MockLLMService:
                 str(getattr(item, "description", "") or ""),
             )
 
-        keywords = [w for w in clean_topic.split() if len(w) > 2]
+        keywords = [word for word in clean_topic.split() if len(word) > 2]
         matches: list[NotebookMatch] = []
-        for nb in catalog:
-            nid, ntitle, ndesc = _get_nb_info(nb)
-            searchable = f"{ntitle} {ndesc} {nid}".lower()
-            matching_kw = [kw for kw in keywords if kw in searchable]
-            if matching_kw:
-                relevance = min(5, 2 + len(matching_kw))
+        for notebook in catalog:
+            notebook_id, notebook_title, notebook_description = _get_notebook_info(notebook)
+            searchable = f"{notebook_title} {notebook_description} {notebook_id}".lower()
+            matching_key_words = [ keyword for  keyword in keywords if  keyword in searchable ]
+            if matching_key_words:
+                relevance = min(5, 2 + len(matching_key_words))
                 matches.append(
                     NotebookMatch(
-                        notebook_id=nid,
-                        notebook_title=ntitle,
-                        reason=f"Matches keywords ({', '.join(matching_kw)}) in title/description",
+                        notebook_id=notebook_id,
+                        notebook_title=notebook_title,
+                        reason=f"Matches keywords ({', '.join(matching_key_words)}) in title/description",
                         relevance=relevance,
                     )
                 )
 
-        matches.sort(key=lambda m: m.relevance, reverse=True)
+        matches.sort(key=lambda match: match.relevance, reverse=True)
         return matches[:limit] if limit else matches

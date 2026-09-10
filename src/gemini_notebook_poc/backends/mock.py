@@ -6,7 +6,7 @@ from typing import Any
 from google import genai
 
 from gemini_notebook_poc.backends.base import BaseNotebookBackend
-from gemini_notebook_poc.config import AppConfig
+from gemini_notebook_poc.application_configuration import ApplicationConfiguration
 from gemini_notebook_poc.model import (
     GroundedAnswer,
     NotebookInfo,
@@ -142,7 +142,7 @@ MOCK_SOURCES: dict[str, list[SourceInfo]] = {
 class MockBackend(BaseNotebookBackend):
     """Mock backend providing sample notebooks and sources."""
 
-    def __init__(self, config: AppConfig):
+    def __init__(self, config: ApplicationConfiguration):
         self.config = config
         self._svc = MockNotebookService()
 

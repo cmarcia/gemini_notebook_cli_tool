@@ -9,7 +9,7 @@ import httpx
 from google import genai
 
 from gemini_notebook_poc.backends.base import BaseNotebookBackend
-from gemini_notebook_poc.config import AppConfig
+from gemini_notebook_poc.application_configuration import ApplicationConfiguration
 from gemini_notebook_poc.model import (
     GroundedAnswer,
     NotebookInfo,
@@ -30,7 +30,7 @@ class EnterpriseAPIError(RuntimeError):
 class EnterpriseBackend(BaseNotebookBackend):
     """Backend utilizing Google Cloud Gemini Enterprise (Discovery Engine API)."""
 
-    def __init__(self, config: AppConfig):
+    def __init__(self, config: ApplicationConfiguration):
         self.config = config
         self.project_id = config.gcp_project_id or "default"
         self.location = config.gcp_location or "global"
@@ -49,6 +49,21 @@ class EnterpriseBackend(BaseNotebookBackend):
         if self.project_id and self.project_id != "default":
             headers["X-Goog-User-Project"] = self.project_id
         return headers
+
+    async def _request(
+        self,
+        method: str,
+        url: str,
+        *,
+        timeout: float = 30.0,
+        **kwargs: Any,
+    ) -> httpx.Response:
+        """Issue an authenticated HTTP request to Discovery Engine endpoints."""
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            request_fn = getattr(client, method.lower(), None)
+            if callable(request_fn):
+                return await request_fn(url, headers=self._get_headers(), **kwargs)
+            return await client.request(method, url, headers=self._get_headers(), **kwargs)
 
     def _handle_http_error(self, response: httpx.Response, action_name: str) -> None:
         try:
@@ -116,63 +131,59 @@ class EnterpriseBackend(BaseNotebookBackend):
     async def list_notebooks(self) -> list[NotebookInfo]:
         """List notebooks using projects.locations.notebooks:listRecentlyViewed."""
         url = f"{self.base_url}/notebooks:listRecentlyViewed"
-        headers = self._get_headers()
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.get(url, headers=headers)
-            if response.status_code != 200:
-                self._handle_http_error(response, "list notebooks")
+        response = await self._request("GET", url)
+        if response.status_code != 200:
+            self._handle_http_error(response, "list notebooks")
 
-            data = response.json()
-            items = data.get("notebooks", [])
-            notebooks: list[NotebookInfo] = []
-            for item in items:
-                # Format: projects/{project}/locations/{loc}/notebooks/{id}
-                full_name = item.get("name", "")
-                notebook_id = full_name.split("/")[-1] if full_name else "unknown"
-                title = (
-                    item.get("title") or item.get("displayName") or f"Notebook {notebook_id[:8]}"
+        data = response.json()
+        items = data.get("notebooks", [])
+        notebooks: list[NotebookInfo] = []
+        for item in items:
+            # Format: projects/{project}/locations/{loc}/notebooks/{id}
+            full_name = item.get("name", "")
+            notebook_id = full_name.split("/")[-1] if full_name else "unknown"
+            title = (
+                item.get("title") or item.get("displayName") or f"Notebook {notebook_id[:8]}"
+            )
+            created_at = item.get("createTime", "")
+            updated_at = item.get("updateTime", "")
+            sources = item.get("sources", [])
+            notebooks.append(
+                NotebookInfo(
+                    id=notebook_id,
+                    title=title,
+                    description=item.get("description", ""),
+                    created_at=created_at,
+                    updated_at=updated_at,
+                    source_count=len(sources),
+                    raw=item,
                 )
-                created_at = item.get("createTime", "")
-                updated_at = item.get("updateTime", "")
-                sources = item.get("sources", [])
-                notebooks.append(
-                    NotebookInfo(
-                        id=notebook_id,
-                        title=title,
-                        description=item.get("description", ""),
-                        created_at=created_at,
-                        updated_at=updated_at,
-                        source_count=len(sources),
-                        raw=item,
-                    )
-                )
-            return notebooks
+            )
+        return notebooks
 
     async def get_notebook(self, notebook_id: str) -> NotebookInfo:
         """Fetch details of a single notebook."""
         url = f"{self.base_url}/notebooks/{notebook_id}"
-        headers = self._get_headers()
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.get(url, headers=headers)
-            if response.status_code != 200:
-                self._handle_http_error(response, f"get notebook '{notebook_id}'")
+        response = await self._request("GET", url)
+        if response.status_code != 200:
+            self._handle_http_error(response, f"get notebook '{notebook_id}'")
 
-            item = response.json()
-            full_name = item.get("name", "")
-            nid = full_name.split("/")[-1] if full_name else notebook_id
-            title = item.get("title") or item.get("displayName") or f"Notebook {nid[:8]}"
-            sources = item.get("sources", [])
-            return NotebookInfo(
-                id=nid,
-                title=title,
-                description=item.get("description", ""),
-                created_at=item.get("createTime", ""),
-                updated_at=item.get("updateTime", ""),
-                source_count=len(sources),
-                raw=item,
-            )
+        item = response.json()
+        full_name = item.get("name", "")
+        nid = full_name.split("/")[-1] if full_name else notebook_id
+        title = item.get("title") or item.get("displayName") or f"Notebook {nid[:8]}"
+        sources = item.get("sources", [])
+        return NotebookInfo(
+            id=nid,
+            title=title,
+            description=item.get("description", ""),
+            created_at=item.get("createTime", ""),
+            updated_at=item.get("updateTime", ""),
+            source_count=len(sources),
+            raw=item,
+        )
 
     async def list_sources(self, notebook_id: str) -> list[SourceInfo]:
         """Fetch all sources associated with a notebook."""
@@ -182,14 +193,12 @@ class EnterpriseBackend(BaseNotebookBackend):
 
         # 2. Also try querying the sub-resource endpoint
         sources_url = f"{self.base_url}/notebooks/{notebook_id}/sources"
-        headers = self._get_headers()
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.get(sources_url, headers=headers)
-            if response.status_code == 200:
-                data = response.json()
-                if data.get("sources"):
-                    raw_sources = data["sources"]
+        response = await self._request("GET", sources_url)
+        if response.status_code == 200:
+            data = response.json()
+            if data.get("sources"):
+                raw_sources = data["sources"]
 
         result: list[SourceInfo] = []
         for idx, s in enumerate(raw_sources):
@@ -236,23 +245,21 @@ class EnterpriseBackend(BaseNotebookBackend):
     async def get_source(self, notebook_id: str, source_id: str) -> SourceInfo:
         """Fetch details of a single source."""
         url = f"{self.base_url}/notebooks/{notebook_id}/sources/{source_id}"
-        headers = self._get_headers()
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.get(url, headers=headers)
-            if response.status_code != 200:
-                # Fallback: search among list_sources
-                sources = await self.list_sources(notebook_id)
-                for s in sources:
-                    if s.id == source_id:
-                        return s
-                self._handle_http_error(response, f"get source '{source_id}'")
+        response = await self._request("GET", url)
+        if response.status_code != 200:
+            # Fallback: search among list_sources
+            sources = await self.list_sources(notebook_id)
+            for s in sources:
+                if s.id == source_id:
+                    return s
+            self._handle_http_error(response, f"get source '{source_id}'")
 
-            s = response.json()
-            full_name = s.get("name", "")
-            sid = full_name.split("/")[-1] if full_name else source_id
-            title = s.get("title") or s.get("displayName") or f"Source {sid[:8]}"
-            return SourceInfo(id=sid, title=title, raw=s)
+        s = response.json()
+        full_name = s.get("name", "")
+        sid = full_name.split("/")[-1] if full_name else source_id
+        title = s.get("title") or s.get("displayName") or f"Source {sid[:8]}"
+        return SourceInfo(id=sid, title=title, raw=s)
 
     async def ask_question(
         self,

@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from gemini_notebook_poc.backends.base import BaseNotebookBackend
-from gemini_notebook_poc.config import AppConfig
+from gemini_notebook_poc.application_configuration import ApplicationConfiguration
 from gemini_notebook_poc.model import (
     GroundedAnswer,
     NotebookInfo,
@@ -19,7 +19,7 @@ from gemini_notebook_poc.services.notebook.notebooklm import NotebookLMService
 class NotebookLMBackend(BaseNotebookBackend):
     """Backend connecting to NotebookLM (web/enterprise) via notebooklm-py."""
 
-    def __init__(self, config: AppConfig):
+    def __init__(self, config: ApplicationConfiguration):
         self.config = config
         self.service = NotebookLMService()
 
